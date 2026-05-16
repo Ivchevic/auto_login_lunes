@@ -220,10 +220,9 @@ def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
 
     try:
         print(f"🧭 提取到 server_id={server_id}，点击 server-card 跳转...")
-        # ✅ 使用 js_click 绕过顶部导航栏遮挡
+        # ✅ 面板内部的卡片依然使用 js_click 绕过顶部导航栏遮挡
         sb.js_click(SERVER_CARD_LINK_SEL)
 
-        # 等待 body 加载，不再死等特定文本
         sb.wait_for_element_visible("body", timeout=15)
         time.sleep(3)
         return server_id, True
@@ -251,9 +250,6 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional
     if not entered_ok:
         return server_id, False, server_pic, logout_pic
 
-    # ==========================================
-    # ✅ 1) 成功进入 server 页后，截图
-    # ==========================================
     server_pic = screenshot(sb, f"server_page_{server_id}_{int(time.time())}.png")
 
     stay1 = random.randint(4, 6)
@@ -273,7 +269,7 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional
 
     try:
         sb.wait_for_element_visible(LOGOUT_SEL, timeout=15)
-        # ✅ 使用 js_click 防止退出按钮被遮挡
+        # ✅ 退出按钮也保留 js_click 防止被遮挡
         sb.js_click(LOGOUT_SEL)
     except Exception:
         screenshot(sb, f"logout_click_failed_{int(time.time())}.png")
@@ -298,9 +294,6 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional
             pass
 
     if is_logout_ok:
-        # ==========================================
-        # ✅ 2) 成功退出到登录页后，截图
-        # ==========================================
         logout_pic = screenshot(sb, f"logout_success_{int(time.time())}.png")
         return server_id, True, server_pic, logout_pic
 
@@ -314,23 +307,40 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
 
         try:
             sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
-            time.sleep(2)
+            
+            # ✅ 1. 多等一会儿，让页面和 Cloudflare 盾彻底稳定，防止表单重绘导致清空
+            time.sleep(4)
 
-            # 等待元素加载，如果超时会进入底部的 except
             sb.wait_for_element_visible(EMAIL_SEL, timeout=25)
             sb.wait_for_element_visible(PASS_SEL, timeout=25)
             sb.wait_for_element_visible(SUBMIT_SEL, timeout=25)
 
+            # ✅ 2. 提前过盾：先尝试点击 Turnstile 验证码，防止填完密码后点盾触发页面重绘清空输入框
+            _try_click_captcha(sb, "输入前")
+
+            # ✅ 3. 稳妥输入法：模拟人类真实交互，先点击聚焦 -> 清空 -> 缓慢输入 -> 停顿
+            sb.click(EMAIL_SEL)
             sb.clear(EMAIL_SEL)
             sb.type(EMAIL_SEL, email)
+            time.sleep(0.5)
+
+            sb.click(PASS_SEL)
             sb.clear(PASS_SEL)
             sb.type(PASS_SEL, password)
+            time.sleep(0.5)
 
-            _try_click_captcha(sb, "提交前")
+            # ✅ 4. 终极强校验：检查输入框里到底有没有字！如果没有，用 JS 强行赋值
+            actual_email = sb.get_attribute(EMAIL_SEL, "value")
+            if not actual_email:
+                print("⚠️ 检测到输入框被盾拦截清空，启动 JS 强制赋值...")
+                sb.set_value(EMAIL_SEL, email)
+                sb.set_value(PASS_SEL, password)
+                time.sleep(0.5)
 
-            # ✅ 按照要求，不使用回车，恢复点击按钮（使用 js_click 避免视觉遮挡）
-            sb.js_click(SUBMIT_SEL)
-            print("🖱️ 已点击登录按钮")
+            # ✅ 5. 必须使用原生点击！
+            # 登录表单对点击事件的 `isTrusted` 属性校验极其严格，不能用 js_click。
+            sb.click(SUBMIT_SEL)
+            print("🖱️ 已使用原生鼠标点击登录按钮")
 
             sb.wait_for_element_visible("body", timeout=30)
             time.sleep(2)
@@ -349,11 +359,10 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
                 time.sleep(1)
 
             if not logged_in:
-                # 正常走完了流程但没登录成功，截图保存
+                # 登录失败现场留证
                 error_pic = screenshot(sb, f"login_failed_{int(time.time())}.png")
                 return "FAIL", welcome_text, has_cf, current_url, None, False, error_pic, None
 
-            # 核心业务：进面板 -> 截图 -> 退出 -> 截图
             server_id, logout_ok, server_pic, logout_pic = _post_login_visit_then_logout(sb)
 
             try:
@@ -364,10 +373,9 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
             return "OK", welcome_text, has_cf, current_url, server_id, logout_ok, server_pic, logout_pic
 
         except Exception as e:
-            # ✅ 核心修复：兜底异常处理。如果在填写表单、点击按钮的过程中发生报错，必定截图！
+            # ✅ 兜底全局异常截图
             print(f"⚠️ 登录流程发生异常: {e}")
             try:
-                # 尝试保存异常现场截图
                 error_pic = screenshot(sb, f"login_exception_{int(time.time())}.png")
                 url_now = sb.get_current_url() or ""
                 has_cf = _has_cf_clearance(sb)
@@ -376,7 +384,6 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
                 url_now = ""
                 has_cf = False
             
-            # 返回失败状态，并将截图传出发送 TG
             return "FAIL", None, has_cf, url_now, None, False, error_pic, None
 
 
@@ -405,8 +412,7 @@ def main():
             print("=" * 70)
 
             try:
-                # 接收修改后的 8 个返回值
-                status, welcome_text, has_cf, url_now, server_id, logout_ok, server_pic, logout_pic = login_then_flow_one_account(
+                status, welcome_text, has_cf, url_now, server_id, logout_ok, pic1, pic2 = login_then_flow_one_account(
                     email, password
                 )
 
@@ -423,6 +429,14 @@ def main():
                         f"当前页：{url_now}\n"
                         f"cf_clearance：{'OK' if has_cf else 'NONE'}"
                     )
+                    print(msg)
+                    tg_send(msg, tg_token, tg_chat)
+
+                    if pic1:
+                        tg_send_photo(pic1, f"🖥️ {safe_email} - 成功进入控制面板", tg_token, tg_chat)
+                    if pic2:
+                        tg_send_photo(pic2, f"👋 {safe_email} - 成功登出", tg_token, tg_chat)
+
                 else:
                     fail += 1
                     msg = (
@@ -432,26 +446,18 @@ def main():
                         f"当前页：{url_now}\n"
                         f"cf_clearance：{'OK' if has_cf else 'NONE'}"
                     )
+                    print(msg)
+                    tg_send(msg, tg_token, tg_chat)
 
-                print(msg)
-                tg_send(msg, tg_token, tg_chat)
-
-                # =======================================
-                # ✅ 如果状态是 OK 并且有截图，发送图片到 TG
-                # =======================================
-                if status == "OK":
-                    if server_pic:
-                        tg_send_photo(server_pic, f"🖥️ {safe_email} - 成功进入控制面板", tg_token, tg_chat)
-                    if logout_pic:
-                        tg_send_photo(logout_pic, f"👋 {safe_email} - 成功登出", tg_token, tg_chat)
+                    if pic1:
+                        tg_send_photo(pic1, f"❌ {safe_email} - 登录异常/失败现场截图", tg_token, tg_chat)
 
             except Exception as e:
                 fail += 1
-                msg = f"❌ Lunes BetaDash 脚本异常\n账号：{safe_email}\n错误：{e}"
+                msg = f"❌ Lunes BetaDash 脚本崩溃\n账号：{safe_email}\n错误：{e}"
                 print(msg)
                 tg_send(msg, tg_token, tg_chat)
 
-            # 账号之间冷却
             time.sleep(5)
             if i < len(accounts):
                 time.sleep(5)
