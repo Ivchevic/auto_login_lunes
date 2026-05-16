@@ -312,53 +312,72 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
     with SB(uc=True, locale="en", test=True) as sb:
         print("🚀 浏览器启动（UC Mode）")
 
-        sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
-        time.sleep(2)
-
         try:
+            sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
+            time.sleep(2)
+
+            # 等待元素加载，如果超时会进入底部的 except
             sb.wait_for_element_visible(EMAIL_SEL, timeout=25)
             sb.wait_for_element_visible(PASS_SEL, timeout=25)
             sb.wait_for_element_visible(SUBMIT_SEL, timeout=25)
-        except Exception:
-            url_now = sb.get_current_url() or ""
-            return "FAIL", None, _has_cf_clearance(sb), url_now, None, False, None, None
 
-        sb.clear(EMAIL_SEL)
-        sb.type(EMAIL_SEL, email)
-        sb.clear(PASS_SEL)
-        sb.type(PASS_SEL, password)
+            sb.clear(EMAIL_SEL)
+            sb.type(EMAIL_SEL, email)
+            sb.clear(PASS_SEL)
+            sb.type(PASS_SEL, password)
 
-        _try_click_captcha(sb, "提交前")
+            _try_click_captcha(sb, "提交前")
 
-        sb.click(SUBMIT_SEL)
-        sb.wait_for_element_visible("body", timeout=30)
-        time.sleep(2)
+            # ✅ 按照要求，不使用回车，恢复点击按钮（使用 js_click 避免视觉遮挡）
+            sb.js_click(SUBMIT_SEL)
+            print("🖱️ 已点击登录按钮")
 
-        _try_click_captcha(sb, "提交后")
+            sb.wait_for_element_visible("body", timeout=30)
+            time.sleep(2)
 
-        has_cf = _has_cf_clearance(sb)
-        current_url = (sb.get_current_url() or "").strip()
+            _try_click_captcha(sb, "提交后")
 
-        welcome_text = None
-        logged_in = False
-        for _ in range(10):
-            logged_in, welcome_text = _is_logged_in(sb)
-            if logged_in:
-                break
-            time.sleep(1)
-
-        if not logged_in:
-            return "FAIL", welcome_text, has_cf, current_url, None, False, None, None
-
-        # 核心业务：进面板 -> 截图 -> 退出 -> 截图
-        server_id, logout_ok, server_pic, logout_pic = _post_login_visit_then_logout(sb)
-
-        try:
+            has_cf = _has_cf_clearance(sb)
             current_url = (sb.get_current_url() or "").strip()
-        except Exception:
-            pass
 
-        return "OK", welcome_text, has_cf, current_url, server_id, logout_ok, server_pic, logout_pic
+            welcome_text = None
+            logged_in = False
+            for _ in range(10):
+                logged_in, welcome_text = _is_logged_in(sb)
+                if logged_in:
+                    break
+                time.sleep(1)
+
+            if not logged_in:
+                # 正常走完了流程但没登录成功，截图保存
+                error_pic = screenshot(sb, f"login_failed_{int(time.time())}.png")
+                return "FAIL", welcome_text, has_cf, current_url, None, False, error_pic, None
+
+            # 核心业务：进面板 -> 截图 -> 退出 -> 截图
+            server_id, logout_ok, server_pic, logout_pic = _post_login_visit_then_logout(sb)
+
+            try:
+                current_url = (sb.get_current_url() or "").strip()
+            except Exception:
+                pass
+
+            return "OK", welcome_text, has_cf, current_url, server_id, logout_ok, server_pic, logout_pic
+
+        except Exception as e:
+            # ✅ 核心修复：兜底异常处理。如果在填写表单、点击按钮的过程中发生报错，必定截图！
+            print(f"⚠️ 登录流程发生异常: {e}")
+            try:
+                # 尝试保存异常现场截图
+                error_pic = screenshot(sb, f"login_exception_{int(time.time())}.png")
+                url_now = sb.get_current_url() or ""
+                has_cf = _has_cf_clearance(sb)
+            except Exception:
+                error_pic = None
+                url_now = ""
+                has_cf = False
+            
+            # 返回失败状态，并将截图传出发送 TG
+            return "FAIL", None, has_cf, url_now, None, False, error_pic, None
 
 
 def main():
