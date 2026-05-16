@@ -155,20 +155,20 @@ def build_accounts_from_env() -> List[Dict[str, str]]:
 
 def _has_cf_clearance(sb: SB) -> bool:
     try:
-        cookies = sb.get_cookies()  # CF
-        cf_clearance = next((c["value"] for c in cookies if c.get("name") == "cf_clearance"), None)  # CF
-        print("🧩 cf_clearance:", "OK" if cf_clearance else "NONE")  # CF
-        return bool(cf_clearance)  # CF
+        cookies = sb.get_cookies()
+        cf_clearance = next((c["value"] for c in cookies if c.get("name") == "cf_clearance"), None)
+        print("🧩 cf_clearance:", "OK" if cf_clearance else "NONE")
+        return bool(cf_clearance)
     except Exception:
         return False
 
 
 def _try_click_captcha(sb: SB, stage: str):
     try:
-        sb.uc_gui_click_captcha()  # CF
-        time.sleep(3)  # CF
+        sb.uc_gui_click_captcha()
+        time.sleep(3)
     except Exception as e:
-        print(f"⚠️ captcha 点击异常（{stage}）：{e}")  # CF
+        print(f"⚠️ captcha 点击异常（{stage}）：{e}")
 
 
 def _is_logged_in(sb: SB) -> Tuple[bool, Optional[str]]:
@@ -198,9 +198,6 @@ def _extract_server_id_from_href(href: str) -> Optional[str]:
 
 
 def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
-    """
-    提取 server_id，并使用 js_click 绕过悬浮导航栏进行跳转
-    """
     try:
         sb.wait_for_element_visible(SERVER_CARD_LINK_SEL, timeout=25)
     except Exception:
@@ -220,7 +217,6 @@ def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
 
     try:
         print(f"🧭 提取到 server_id={server_id}，点击 server-card 跳转...")
-        # ✅ 面板内部的卡片依然使用 js_click 绕过顶部导航栏遮挡
         sb.js_click(SERVER_CARD_LINK_SEL)
 
         sb.wait_for_element_visible("body", timeout=15)
@@ -240,9 +236,6 @@ def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
 
 
 def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional[str], Optional[str]]:
-    """
-    返回 (server_id, logout_ok, server_pic_path, logout_pic_path)
-    """
     server_id, entered_ok = _find_server_id_and_go_server_page(sb)
     server_pic = None
     logout_pic = None
@@ -269,7 +262,6 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional
 
     try:
         sb.wait_for_element_visible(LOGOUT_SEL, timeout=15)
-        # ✅ 退出按钮也保留 js_click 防止被遮挡
         sb.js_click(LOGOUT_SEL)
     except Exception:
         screenshot(sb, f"logout_click_failed_{int(time.time())}.png")
@@ -302,50 +294,48 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional
 
 
 def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optional[str], bool, str, Optional[str], bool, Optional[str], Optional[str]]:
+    before_submit_pic = None  # 用于记录提交前的截图
+    
     with SB(uc=True, locale="en", test=True) as sb:
         print("🚀 浏览器启动（UC Mode）")
 
         try:
             sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
             
-            # ✅ 1. 多等一会儿，让页面和 Cloudflare 盾彻底稳定，防止表单重绘导致清空
-            time.sleep(4)
-
+            # 等待元素加载
             sb.wait_for_element_visible(EMAIL_SEL, timeout=25)
             sb.wait_for_element_visible(PASS_SEL, timeout=25)
             sb.wait_for_element_visible(SUBMIT_SEL, timeout=25)
+            time.sleep(2)
 
-            # ✅ 2. 提前过盾：先尝试点击 Turnstile 验证码，防止填完密码后点盾触发页面重绘清空输入框
-            _try_click_captcha(sb, "输入前")
-
-            # ✅ 3. 稳妥输入法：模拟人类真实交互，先点击聚焦 -> 清空 -> 缓慢输入 -> 停顿
-            sb.click(EMAIL_SEL)
-            sb.clear(EMAIL_SEL)
-            sb.type(EMAIL_SEL, email)
+            # ✅ 1. 模拟真人缓慢输入，并强制触发失去焦点(onBlur)
+            # 使用 delay=0.08 让敲击变得缓慢，确保前端框架监听到所有按键
+            sb.type(EMAIL_SEL, email, delay=0.08)
+            sb.click("h2") # 点击空白处的标题，让输入框失去焦点，保存状态
             time.sleep(0.5)
 
-            sb.click(PASS_SEL)
-            sb.clear(PASS_SEL)
-            sb.type(PASS_SEL, password)
+            sb.type(PASS_SEL, password, delay=0.08)
+            sb.click("h2")
             time.sleep(0.5)
+            print("🔑 账号密码已填写完成")
 
-            # ✅ 4. 终极强校验：检查输入框里到底有没有字！如果没有，用 JS 强行赋值
-            actual_email = sb.get_attribute(EMAIL_SEL, "value")
-            if not actual_email:
-                print("⚠️ 检测到输入框被盾拦截清空，启动 JS 强制赋值...")
-                sb.set_value(EMAIL_SEL, email)
-                sb.set_value(PASS_SEL, password)
-                time.sleep(0.5)
+            # ✅ 2. 先点盾，再死等
+            _try_click_captcha(sb, "提交前过盾")
+            
+            print("⏳ 等待 8 秒让 CF 盾完成后台验证并生成 token...")
+            time.sleep(8) # 这里的 8 秒非常关键，防止因 Token 未生成导致页面被刷新
 
-            # ✅ 5. 必须使用原生点击！
-            # 登录表单对点击事件的 `isTrusted` 属性校验极其严格，不能用 js_click。
+            # ✅ 3. 截取点击登录前的“真相图”
+            before_submit_pic = screenshot(sb, f"before_submit_{int(time.time())}.png")
+
+            # ✅ 4. 必须使用原生点击
             sb.click(SUBMIT_SEL)
             print("🖱️ 已使用原生鼠标点击登录按钮")
 
             sb.wait_for_element_visible("body", timeout=30)
-            time.sleep(2)
+            time.sleep(3)
 
-            _try_click_captcha(sb, "提交后")
+            _try_click_captcha(sb, "提交后过盾 (如有)")
 
             has_cf = _has_cf_clearance(sb)
             current_url = (sb.get_current_url() or "").strip()
@@ -359,9 +349,10 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
                 time.sleep(1)
 
             if not logged_in:
-                # 登录失败现场留证
+                # 如果失败了，我们把两张图都传回去！
+                # pic1 位置传失败后的图，pic2 位置传点击前的真相图
                 error_pic = screenshot(sb, f"login_failed_{int(time.time())}.png")
-                return "FAIL", welcome_text, has_cf, current_url, None, False, error_pic, None
+                return "FAIL", welcome_text, has_cf, current_url, None, False, error_pic, before_submit_pic
 
             server_id, logout_ok, server_pic, logout_pic = _post_login_visit_then_logout(sb)
 
@@ -373,7 +364,6 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
             return "OK", welcome_text, has_cf, current_url, server_id, logout_ok, server_pic, logout_pic
 
         except Exception as e:
-            # ✅ 兜底全局异常截图
             print(f"⚠️ 登录流程发生异常: {e}")
             try:
                 error_pic = screenshot(sb, f"login_exception_{int(time.time())}.png")
@@ -384,7 +374,8 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
                 url_now = ""
                 has_cf = False
             
-            return "FAIL", None, has_cf, url_now, None, False, error_pic, None
+            # pic2 传 before_submit_pic (如果有的话)
+            return "FAIL", None, has_cf, url_now, None, False, error_pic, before_submit_pic
 
 
 def main():
@@ -432,6 +423,7 @@ def main():
                     print(msg)
                     tg_send(msg, tg_token, tg_chat)
 
+                    # 登录成功时，pic1是面板图，pic2是退出图
                     if pic1:
                         tg_send_photo(pic1, f"🖥️ {safe_email} - 成功进入控制面板", tg_token, tg_chat)
                     if pic2:
@@ -449,8 +441,13 @@ def main():
                     print(msg)
                     tg_send(msg, tg_token, tg_chat)
 
+                    # 🚨 登录失败时，修改了发图逻辑：
+                    # pic2 是点击登录前的截图，先发这个看真相！
+                    if pic2:
+                        tg_send_photo(pic2, f"📸 {safe_email} - 检查：点击登录前，究竟填上字了吗？", tg_token, tg_chat)
+                    # pic1 是失败后的当前页面状态
                     if pic1:
-                        tg_send_photo(pic1, f"❌ {safe_email} - 登录异常/失败现场截图", tg_token, tg_chat)
+                        tg_send_photo(pic1, f"❌ {safe_email} - 失败：提交后，页面变成了这样", tg_token, tg_chat)
 
             except Exception as e:
                 fail += 1
