@@ -294,7 +294,7 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool, Optional
 
 
 def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optional[str], bool, str, Optional[str], bool, Optional[str], Optional[str]]:
-    before_submit_pic = None  # 用于记录提交前的截图
+    before_submit_pic = None
     
     with SB(uc=True, locale="en", test=True) as sb:
         print("🚀 浏览器启动（UC Mode）")
@@ -302,33 +302,39 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
         try:
             sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
             
+            # ✅ 1. 多等一会儿，让页面稳定
+            time.sleep(4)
+
             # 等待元素加载
             sb.wait_for_element_visible(EMAIL_SEL, timeout=25)
             sb.wait_for_element_visible(PASS_SEL, timeout=25)
             sb.wait_for_element_visible(SUBMIT_SEL, timeout=25)
-            time.sleep(2)
 
-            # ✅ 1. 模拟真人缓慢输入，并强制触发失去焦点(onBlur)
-            # 使用 delay=0.08 让敲击变得缓慢，确保前端框架监听到所有按键
-            sb.type(EMAIL_SEL, email, delay=0.08)
-            sb.click("h2") # 点击空白处的标题，让输入框失去焦点，保存状态
+            # ✅ 2. 模拟真人操作：点击聚焦 -> 清空 -> 输入 -> 点击空白处失焦保存状态
+            # (去掉了不支持的 delay 参数)
+            sb.click(EMAIL_SEL)
+            sb.clear(EMAIL_SEL)
+            sb.type(EMAIL_SEL, email)
+            sb.click("h2") 
             time.sleep(0.5)
 
-            sb.type(PASS_SEL, password, delay=0.08)
+            sb.click(PASS_SEL)
+            sb.clear(PASS_SEL)
+            sb.type(PASS_SEL, password)
             sb.click("h2")
             time.sleep(0.5)
             print("🔑 账号密码已填写完成")
 
-            # ✅ 2. 先点盾，再死等
+            # ✅ 3. 先点盾，再死等
             _try_click_captcha(sb, "提交前过盾")
             
             print("⏳ 等待 8 秒让 CF 盾完成后台验证并生成 token...")
-            time.sleep(8) # 这里的 8 秒非常关键，防止因 Token 未生成导致页面被刷新
+            time.sleep(8) 
 
-            # ✅ 3. 截取点击登录前的“真相图”
+            # ✅ 4. 截取点击登录前的“真相图”
             before_submit_pic = screenshot(sb, f"before_submit_{int(time.time())}.png")
 
-            # ✅ 4. 必须使用原生点击
+            # ✅ 5. 必须使用原生点击
             sb.click(SUBMIT_SEL)
             print("🖱️ 已使用原生鼠标点击登录按钮")
 
@@ -350,7 +356,6 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
 
             if not logged_in:
                 # 如果失败了，我们把两张图都传回去！
-                # pic1 位置传失败后的图，pic2 位置传点击前的真相图
                 error_pic = screenshot(sb, f"login_failed_{int(time.time())}.png")
                 return "FAIL", welcome_text, has_cf, current_url, None, False, error_pic, before_submit_pic
 
@@ -374,7 +379,6 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
                 url_now = ""
                 has_cf = False
             
-            # pic2 传 before_submit_pic (如果有的话)
             return "FAIL", None, has_cf, url_now, None, False, error_pic, before_submit_pic
 
 
